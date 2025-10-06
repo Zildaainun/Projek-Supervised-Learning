@@ -1,0 +1,371 @@
+---
+title: "Regresi SPL"
+author: "Zilda Ainun Tazkia"
+date: "2025-10-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 8, fig.height = 6)
+```
+
+# AUTOKORELASI
+
+## Memuat Paket dan Data
+```{r paket}
+library(lmtest)
+library(car)
+library(nlme)
+library(readxl)
+```
+
+## Membangkitkan Data
+```{r impor}
+set.seed(123)  
+n <- 100
+
+# Bangkitkan variabel independen
+x1 <- runif(n, 50, 150)  #  iklan TV
+x2 <- runif(n, 30, 100)  #  iklan Radio
+x3 <- runif(n, 10, 50)   #  variabel lain
+
+# Buat autokorelasi AR(1) untuk error
+rho <- 0.7  # koefisien autokorelasi positif
+e <- numeric(n)
+e[1] <- rnorm(1, 0, 5)  # error pertama
+for(t in 2:n){
+  e[t] <- rho*e[t-1] + rnorm(1, 0, 5)  # AR(1)
+}
+
+# Bangkitkan Y
+beta0 <- 10
+beta1 <- 0.5
+beta2 <- 0.3
+beta3 <- 0.2
+
+y <- beta0 + beta1*x1 + beta2*x2 + beta3*x3 + e
+
+# Gabungkan jadi data frame
+data_autokorelasi <- data.frame(
+  time = 1:n,
+  x1 = x1,
+  x2 = x2,
+  x3 = x3,
+  y = y
+)
+```
+
+## Menampilkan Data 
+```{r heading}
+head(data_autokorelasi)
+```
+
+## Membangun Model OLS Awal (Untuk Diagnosis)
+``` {r OLS}
+# Model OLS sama seperti file sebelumnya
+model_ols <- lm(y ~ x1 + x2 + x3, data = data_autokorelasi)
+```
+
+## Diagnosis Autokorelasi
+``` {r Grafik}
+par(mfrow = c(2, 2))
+plot(model_ols)
+par(mfrow = c(1, 1))
+```
+
+Uji Autokorelasi (Durbin-Watson)
+
+Tujuan: Menguji apakah ada korelasi antar sisaan pada observasi yang berdekatan. Autokorelasi umumnya menjadi masalah pada data deret waktu (time series).
+
+Hipotesis:
+
+H_0: Tidak ada autokorelasi (koefisien autokorelasi = 0).
+
+H_1: Terdapat autokorelasi.
+
+Kriteria Keputusan: Tolak H_0 jika p-value < 0.05. Asumsi independensi sisaan terpenuhi jika kita gagal menolak H_0 (p-value > 0.05).
+
+``` {r Autokorelasi}
+print(dwtest(model_ols))
+```
+
+## Visualisasi Autokorelasi
+Pola non-acak pada plot sisaan mengindikasikan adanya autokorelasi.
+
+``` {r DiagAutokol}
+# Simpan sisaan ke dalam variabel baru
+sisaan_ols <- residuals(model_ols)
+
+# Plot sisaan terhadap indeks yang panjangnya dijamin sama.
+# Ini akan mencegah error jika ada data NA yang dihilangkan oleh lm().
+plot(1:length(sisaan_ols), sisaan_ols, type = 'o',
+     xlab = "Urutan Observasi (Indeks)",
+     ylab = "Sisaan OLS",
+     main = "Plot Sisaan OLS terhadap Urutan Waktu")
+abline(h = 0, col = "red", lty = 2)
+```
+
+ACF (Autocorrelation Function): Menunjukkan korelasi antara sisaan dengan nilai-nilai lag-nya.
+
+PACF (Partial Autocorrelation Function): Menunjukkan korelasi antara sisaan dengan nilai lag-nya setelah menghilangkan efek dari lag-lag perantara.
+
+``` {r DiagPACF}
+# Dapatkan sisaan dari model OLS awal
+sisaan_ols <- residuals(model_ols)
+
+# Atur layout plot menjadi 1 baris, 2 kolom
+par(mfrow = c(1, 2))
+
+# Buat plot ACF dan PACF
+acf(sisaan_ols, main = "ACF dari Sisaan OLS")
+pacf(sisaan_ols, main = "PACF dari Sisaan OLS")
+
+# Kembalikan layout ke default
+par(mfrow = c(1, 1))
+```
+
+# Multikolineritas
+
+## Memuat Paket dan Data
+```{r paket}
+library(readxl)
+library(car)
+library(glmnet)
+library(knitr)
+library(reshape)
+library(ggplot2)
+```
+
+## Membangkitkan Data
+```{r impor}
+set.seed(123)  # supaya hasil bisa direproduksi
+n <- 100
+
+# Bangkitkan variabel independen
+x1 <- runif(n, 5000000, 15000000)          
+x2 <- x1 + runif(n, 500000, 1000000)     
+x3 <- runif(n, 10, 50)           
+
+# Bangkitkan variabel dependen Y
+beta0 <- 20
+beta1 <- 0.5
+beta2 <- 0.3
+beta3 <- 0.2
+y <- beta0 + beta1*x1 + beta2*x2 + beta3*x3 + rnorm(n, 0, 5)
+
+# Gabungkan jadi data frame
+data_multikolineritas <- data.frame(
+  Iklan_Tv = x1,
+  Iklan_Radio = x2,
+  Endorse = x3,
+  Penjualan = y
+)
+
+```
+
+## Menampilkan Data 
+```{r heading}
+head(data_multikolineritas)
+```
+
+## Diagnosis Multikolinearitas
+Mengukur seberapa besar korelasi linear antar prediktor dalam model regresi. Multikolinearitas tinggi dapat membuat koefisien regresi tidak stabil dan standar error meningkat, sehingga uji t/f menjadi tidak reliabel.
+
+Hipotesis:
+
+H₀: Tidak ada multikolinearitas (VIF ≤ 10).
+
+H₁: Terdapat multikolinearitas (VIF > 10).
+
+Kriteria Keputusan:
+
+Jika VIF > 10 → tolak H₀ → multikolinearitas parah.
+
+Jika VIF ≤ 10 → gagal menolak H₀ → multikolinearitas tidak serius.
+
+Interpretasi:
+
+VIF tinggi → variabel prediktor sangat berkorelasi dengan prediktor lain.
+
+Langkah penanganan:
+
+Menghapus salah satu variabel yang berkorelasi tinggi.
+
+Menggunakan teknik regularisasi seperti LASSO atau Ridge Regression.
+```{r}
+# Membuat model OLS pada data asli untuk menghitung VIF
+model_ols <- lm(Penjualan ~ Iklan_Tv + Iklan_Radio + Endorse, data = data_multikolineritas)
+vif_values <- vif(model_ols_raw)
+
+print("--- Hasil Uji VIF untuk Multikolinearitas ---")
+print(vif_values)
+
+# Analisis hasil VIF
+if (any(vif_values > 10)) {
+  print("🚨 MULTIKOLINEARITAS TERDETEKSI!")
+  print("KESIMPULAN: Ada multikolinearitas parah.")
+  high_vif_vars <- names(vif_values[vif_values > 10])
+  print(paste("Variabel dengan VIF > 10:", paste(high_vif_vars, collapse = ", ")))
+} else {
+  print("✅ Tidak ada multikolinearitas yang serius (semua VIF < 10)")
+}
+
+# Matriks korelasi untuk memahami hubungan antar variabel
+cat("\n--- Matriks Korelasi Antar Prediktor ---\n")
+cor_matrix <- cor(data_multikolineritas[, c("Iklan_Tv", "Iklan_Radio", "Endorse")])
+kable(cor_matrix, caption = "Matriks Korelasi Antar Variabel Prediktor", digits = 3)
+```
+
+## Visualisasi Multikolineritas
+```{r}
+# Pastikan cor_matrix adalah matriks
+cor_matrix <- as.matrix(cor(data_multikolineritas[, c("Iklan_Tv", "Iklan_Radio", "Endorse")]))
+
+# Ubah menjadi format long
+cor_long <- melt(cor_matrix, varnames = c("Var1", "Var2"))
+
+# Heatmap
+ggplot(cor_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1,1), space = "Lab",
+                       name="Korelasi") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  labs(title = "Heatmap Korelasi Antar Prediktor", x = "", y = "")
+```
+
+# Sisaan Normal Baku
+
+## Membangkitkan Data
+```{r}
+set.seed(123)  
+n <- 100       
+
+# Bangkitkan 3 variabel independen
+x1 <- rnorm(n, mean = 0, sd = 1)
+x2 <- rnorm(n, mean = 0, sd = 1)
+x3 <- rnorm(n, mean = 0, sd = 1)
+
+# Bangkitkan variabel dependen (linear combination + noise)
+beta0 <- 0
+beta1 <- 0.5
+beta2 <- 0.3
+beta3 <- 0.2
+y <- beta0 + beta1*x1 + beta2*x2 + beta3*x3 + rnorm(n, 0, 1)
+
+# Gabungkan ke data frame
+data_normalitas <- data.frame(
+  x1 = x1,
+  x2 = x2,
+  x3 = x3,
+  y = y
+)
+```
+
+## Menampilkan Data 
+```{r heading}
+head(data_normalitas)
+```
+
+## Membangun Model OLS Awal (Untuk Diagnosis)
+``` {r OLS}
+# Model OLS sama seperti file sebelumnya
+model_ols <- lm(y ~ x1 + x2 + x3, data = data_normalitas)
+```
+
+## Diagnosis Normalitas
+Uji Normalitas (Shapiro-Wilk)
+
+Tujuan: Menguji apakah sisaan model berdistribusi normal.
+
+Hipotesis:
+
+H_0: Sisaan berdistribusi normal.
+
+H_1: Sisaan tidak berdistribusi normal.
+
+Kriteria Keputusan: Tolak H_0 jika p-value < 0.05. Asumsi normalitas terpenuhi jika kita gagal menolak H_0 (p-value > 0.05).
+
+``` {r Normal}
+print(shapiro.test(residuals(model_ols)))
+```
+
+## Visualisasi Normalitas
+```{r}
+# Ambil residual dari model OLS
+residuals_ols <- residuals(model_ols)
+
+# 1. Histogram dengan kurva normal
+hist(residuals_ols, breaks = 15, probability = TRUE,
+     main = "Histogram Residual Model OLS",
+     xlab = "Residual",
+     col = "lightblue", border = "black")
+# Tambahkan kurva distribusi normal
+xfit <- seq(min(residuals_ols), max(residuals_ols), length = 100)
+yfit <- dnorm(xfit, mean = mean(residuals_ols), sd = sd(residuals_ols))
+lines(xfit, yfit, col = "red", lwd = 2)
+```
+
+# Heteroskedastisitas
+
+## Membangkitkan Data
+```{r}
+set.seed(123)
+n <- 100
+
+# Variabel independen
+x1 <- runif(n, 1, 10)
+x2 <- runif(n, 5, 15)
+x3 <- runif(n, 10, 20)
+
+error <- rnorm(n, mean = 0, sd = 0.5 * x1)
+
+# Variabel dependen
+beta0 <- 5
+beta1 <- 2
+beta2 <- 1.5
+beta3 <- 1
+y <- beta0 + beta1*x1 + beta2*x2 + beta3*x3 + error
+
+# Gabungkan menjadi data frame
+data_hetero <- data.frame(x1 = x1, x2 = x2, x3 = x3, y = y)
+```
+
+## Menampilkan Data 
+```{r heading}
+head(data_hetero)
+```
+
+## Membangun Model OLS Awal (Untuk Diagnosis)
+``` {r OLS}
+# Model OLS sama seperti file sebelumnya
+model_ols <- lm(y ~ x1 + x2 + x3, data = data_hetero)
+```
+
+## Diagnosis Heteroskedastisitas
+Uji Homoskedastisitas (Breusch-Pagan)
+
+Tujuan: Menguji apakah varians dari sisaan konstan (homoskedastisitas) atau tidak (heteroskedastisitas).
+
+Hipotesis:
+
+H_0: Varians sisaan konstan (homoskedastisitas).
+
+H_1: Varians sisaan tidak konstan (terdapat heteroskedastisitas).
+
+Kriteria Keputusan: Tolak H_0 jika p-value < 0.05. Asumsi homoskedastisitas terpenuhi jika kita gagal menolak H_0 (p-value > 0.05).
+
+``` {r Homogen}
+print(bptest(model_ols))
+```
+
+## Visualisasi heteroskedastisitas
+```{r}
+plot(model_ols_awal$fitted.values, residuals(model_ols_awal),
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Plot Residual vs Fitted (Heteroskedastisitas)",
+     pch = 19, col = "blue")
+abline(h = 0, col = "red", lwd = 2)
+```
